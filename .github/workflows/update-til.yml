@@ -1,0 +1,59 @@
+name: Update TIL in Profile README
+
+on:
+  schedule:
+    - cron: "0 1 * * *"   # runs daily at 1am UTC
+  workflow_dispatch:
+
+jobs:
+  update-readme:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch latest TIL entries
+        run: |
+          # Get the 5 most recent TIL markdown files from the today-i-learned repo
+          curl -s "https://api.github.com/repos/tech7417/today-i-learned/git/trees/main?recursive=1" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            | python3 -c "
+          import sys, json, re
+          data = json.load(sys.stdin)
+          files = [f['path'] for f in data.get('tree', []) if f['path'].endswith('.md') and f['path'] != 'README.md']
+          files.sort(reverse=True)
+          latest = files[:5]
+          lines = []
+          for f in latest:
+              # format: 2025/03/nodejs-streams.md -> 2025-03 | nodejs-streams
+              parts = f.replace('.md','').split('/')
+              date = parts[0] + '-' + parts[1] if len(parts) >= 3 else parts[0]
+              title = parts[-1].replace('-', ' ').title()
+              url = f'https://github.com/tech7417/today-i-learned/blob/main/{f}'
+              lines.append(f'- [{title}]({url}) — \`{date}\`')
+          print('\n'.join(lines))
+          " > til_entries.txt
+
+      - name: Inject TIL into README
+        run: |
+          python3 -c "
+          with open('README.md', 'r') as f:
+              content = f.read()
+          with open('til_entries.txt', 'r') as f:
+              entries = f.read().strip()
+          import re
+          new_section = '<!-- TIL-START -->\n' + entries + '\n<!-- TIL-END -->'
+          content = re.sub(r'<!-- TIL-START -->.*?<!-- TIL-END -->', new_section, content, flags=re.DOTALL)
+          with open('README.md', 'w') as f:
+              f.write(content)
+          print('README updated.')
+          "
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git diff --staged --quiet || git commit -m "chore: update TIL entries [skip ci]"
+          git push
